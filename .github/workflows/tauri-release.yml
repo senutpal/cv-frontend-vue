@@ -179,19 +179,23 @@ jobs:
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
             - name: Update Repository Changelog
+              env:
+                  NEW_CHANGELOG: ${{ needs.version.outputs.changelog }}
               run: |
                   CHANGELOG_FILE="CHANGELOG.md"
-                  echo "${{ needs.version.outputs.changelog }}" > NEW_CHANGELOG.md
+                  printf "%s\n" "$NEW_CHANGELOG" > NEW_CHANGELOG.md
                   if [ -f "$CHANGELOG_FILE" ]; then
                     cat "$CHANGELOG_FILE" >> NEW_CHANGELOG.md
                   fi
                   mv NEW_CHANGELOG.md "$CHANGELOG_FILE"
 
             - name: Commit and Push Changelog
+              env:
+                  NEW_VERSION: ${{ needs.version.outputs.new_version }}
               run: |
                   git pull origin ${{ github.ref_name }} --rebase
                   git add CHANGELOG.md
-                  git commit -m "chore: update changelog for ${{ needs.version.outputs.new_version }}" || echo "No changes"
+                  git commit -m "chore: update changelog for $NEW_VERSION" || echo "No changes"
                   # git push origin HEAD:${{ github.ref_name }}
 
             - name: Download all build artifacts
@@ -209,6 +213,7 @@ jobs:
             - name: Create GitHub Release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  NEW_VERSION: ${{ needs.version.outputs.new_version }}
+                  CHANGELOG: ${{ needs.version.outputs.changelog }}
               run: |
-                  NEW_VERSION="${{ needs.version.outputs.new_version }}"
-                  echo "DRY RUN: gh release create $NEW_VERSION --title \"CircuitVerse Desktop $NEW_VERSION\" --notes \"${{ needs.version.outputs.changelog }}\" --latest release-assets/*"
+                  echo "DRY RUN: gh release create $NEW_VERSION --title \"CircuitVerse Desktop $NEW_VERSION\" --notes \"$CHANGELOG\" --latest release-assets/*"
