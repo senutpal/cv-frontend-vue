@@ -11,8 +11,6 @@ concurrency:
     cancel-in-progress: true
 
 on:
-    push:
-        branches: [feat/desktop-tauri-support]
     workflow_dispatch:
         inputs:
             version-bump:
@@ -108,8 +106,8 @@ jobs:
                   git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
                   git commit -m "chore: bump version to $NEW_VERSION"
                   git tag "$NEW_VERSION"
-                  # git push origin HEAD:${{ github.ref_name }}
-                  # git push origin "$NEW_VERSION"
+                  git push origin HEAD:${{ github.ref_name }}
+                  git push origin "$NEW_VERSION"
 
     build-tauri:
         runs-on: ${{ matrix.os }}
@@ -196,7 +194,7 @@ jobs:
                   git pull origin ${{ github.ref_name }} --rebase
                   git add CHANGELOG.md
                   git commit -m "chore: update changelog for $NEW_VERSION" || echo "No changes"
-                  # git push origin HEAD:${{ github.ref_name }}
+                  git push origin HEAD:${{ github.ref_name }}
 
             - name: Download all build artifacts
               uses: actions/download-artifact@v4
@@ -216,4 +214,8 @@ jobs:
                   NEW_VERSION: ${{ needs.version.outputs.new_version }}
                   CHANGELOG: ${{ needs.version.outputs.changelog }}
               run: |
-                  echo "DRY RUN: gh release create $NEW_VERSION --title \"CircuitVerse Desktop $NEW_VERSION\" --notes \"$CHANGELOG\" --latest release-assets/*"
+                  gh release create "$NEW_VERSION" \
+                    --title "CircuitVerse Desktop $NEW_VERSION" \
+                    --notes "$CHANGELOG" \
+                    --latest \
+                    release-assets/*
