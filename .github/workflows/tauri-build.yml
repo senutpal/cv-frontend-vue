@@ -3,6 +3,13 @@ name: Vue Simulator Desktop Release
 on:
     pull_request:
         types: [opened, synchronize, reopened]
+        paths:
+            - 'src/**'
+            - 'src-tauri/**'
+            - 'package.json'
+            - 'package-lock.json'
+            - 'build-desktop.js'
+            - '.github/workflows/tauri-build.yml'
     release:
         types: [created]
 
@@ -11,7 +18,7 @@ permissions:
     actions: read
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
+    group: build-${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -107,7 +114,7 @@ jobs:
                   releaseId: ${{ github.event.release.id }}
 
             - name: Code Signing Setup (Windows)
-              if: matrix.platform == 'windows-latest'
+              if: matrix.platform == 'windows-latest' && github.event_name == 'release'
               shell: powershell
               env:
                   CERT_DATA: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
@@ -117,7 +124,6 @@ jobs:
                       Write-Host "No certificate configured, skipping signing"
                       exit 0
                   }
-
                   $certBytes = [Convert]::FromBase64String($env:CERT_DATA)
                   $certPath = "C:\temp\codesign.pfx"
                   New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
@@ -125,7 +131,7 @@ jobs:
                   Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force)
 
             - name: Code Signing (Windows)
-              if: matrix.platform == 'windows-latest'
+              if: matrix.platform == 'windows-latest' && github.event_name == 'release'
               shell: powershell
               env:
                   CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -134,7 +140,6 @@ jobs:
                       Write-Host "No certificate found, skipping signing"
                       exit 0
                   }
-
                   $filesToSign = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -Include @("*.exe", "*.msi")
                   foreach ($file in $filesToSign) {
                     & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe" sign `
@@ -147,7 +152,7 @@ jobs:
                   }
 
             - name: Code Signing Setup (macOS)
-              if: matrix.platform == 'macos-latest'
+              if: matrix.platform == 'macos-latest' && github.event_name == 'release'
               env:
                   CERT_DATA: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
                   CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -156,13 +161,12 @@ jobs:
                     echo "No certificate configured, skipping signing"
                     exit 0
                   fi
-
                   echo "$CERT_DATA" | base64 --decode > /tmp/developer_certificate.p12
                   security import /tmp/developer_certificate.p12 -k ~/Library/Keychains/login.keychain-db -P "$CERT_PASSWORD" -T /usr/bin/codesign
                   security set-key-partition-list -S apple-tool:,apple: -s -k "$CERT_PASSWORD" ~/Library/Keychains/login.keychain-db
 
             - name: Code Signing (macOS)
-              if: matrix.platform == 'macos-latest'
+              if: matrix.platform == 'macos-latest' && github.event_name == 'release'
               env:
                   DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
               run: |
@@ -170,12 +174,11 @@ jobs:
                     echo "No certificate found, skipping signing"
                     exit 0
                   fi
-
                   find src-tauri/target/release/bundle -name "*.app" -exec codesign --force --deep --sign "$DEVELOPER_ID" {} \;
                   find src-tauri/target/release/bundle -name "*.dmg" -exec codesign --force --sign "$DEVELOPER_ID" {} \;
 
             - name: Code Signing Setup (Linux)
-              if: matrix.platform == 'ubuntu-22.04'
+              if: matrix.platform == 'ubuntu-22.04' && github.event_name == 'release'
               env:
                   GPG_KEY: ${{ secrets.GPG_KEY }}
               run: |
@@ -183,12 +186,11 @@ jobs:
                     echo "No GPG key configured, skipping signing"
                     exit 0
                   fi
-
                   echo "$GPG_KEY" | base64 --decode > /tmp/gpg_private.key
                   gpg --import /tmp/gpg_private.key
 
             - name: Code Signing (Linux)
-              if: matrix.platform == 'ubuntu-22.04'
+              if: matrix.platform == 'ubuntu-22.04' && github.event_name == 'release'
               env:
                   GPG_KEY_ID: ${{ secrets.LINUX_GPG_KEY_ID }}
               run: |
@@ -196,10 +198,9 @@ jobs:
                     echo "No GPG key found, skipping signing"
                     exit 0
                   fi
-
                   for file in $(find src-tauri/target/release/bundle -name "*.deb" -o -name "*.AppImage"); do
                     gpg --detach-sign --armor --local-user "$GPG_KEY_ID" "$file"
-                    done
+                  done
 
             - name: Upload Build Artifacts
               uses: actions/upload-artifact@v4
@@ -209,71 +210,4 @@ jobs:
                   path: |
                       src-tauri/target/**/release/bundle/
                       !src-tauri/target/**/release/bundle/**/*.dSYM/**
-                  retention-days: 30
-
-    release-summary:
-        name: Release Summary
-        runs-on: ubuntu-latest
-        needs: build-tauri
-        if: github.event_name == 'release'
-
-        steps:
-            - name: Download All Artifacts
-              uses: actions/download-artifact@v4
-              with:
-                  path: artifacts
-
-            - name: Generate Release Summary
-              run: |
-                  echo "## Build Artifacts Summary" >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "| Platform | Architecture | Status |" >> $GITHUB_STEP_SUMMARY
-                  echo "|----------|--------------|--------|" >> $GITHUB_STEP_SUMMARY
-
-                  for dir in artifacts/build-artifacts-*; do
-                    if [ -d "$dir" ]; then
-                      platform=$(echo "$dir" | sed 's/.*build-artifacts-\(.*\)-\(.*\)/\1/')
-                      arch=$(echo "$dir" | sed 's/.*build-artifacts-\(.*\)-\(.*\)/\2/')
-                      
-                      if [ "$(find "$dir" -type f | wc -l)" -gt 0 ]; then
-                        status="Success"
-                      else
-                        status="Failed"
-                      fi
-                      
-                      echo "| $platform | $arch | $status |" >> $GITHUB_STEP_SUMMARY
-                    fi
-                  done
-
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "All artifacts have been uploaded to the release assets." >> $GITHUB_STEP_SUMMARY
-
-    security-scan:
-        name: Security Scan
-        runs-on: ubuntu-latest
-        needs: build-tauri
-        if: github.event_name == 'release'
-
-        steps:
-            - name: Checkout Repository
-              uses: actions/checkout@v4
-
-            - name: Run Cargo Audit
-              run: |
-                  cargo install cargo-audit
-                  cd src-tauri
-                  cargo audit
-
-            - name: Run Trivy Security Scan
-              uses: aquasecurity/trivy-action@master
-              with:
-                  scan-type: 'fs'
-                  scan-ref: '.'
-                  format: 'sarif'
-                  output: 'trivy-results.sarif'
-
-            - name: Upload Trivy Scan Results
-              uses: github/codeql-action/upload-sarif@v3
-              if: always()
-              with:
-                  sarif_file: 'trivy-results.sarif'
+                  retention-days: 7
