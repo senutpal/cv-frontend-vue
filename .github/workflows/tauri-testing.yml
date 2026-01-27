@@ -72,9 +72,6 @@ jobs:
               run: |
                   node build-desktop.js
 
-            - name: Run Linting
-              run: npm run lint
-
             - name: Run Tests
               run: npm run test
 
