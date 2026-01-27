@@ -1,7 +1,6 @@
 const os = require('os')
 const { execSync } = require('child_process')
 const fs = require('fs')
-const path = require('path')
 
 function runCommand(command) {
     try {
@@ -22,13 +21,39 @@ function runCommand(command) {
 }
 
 function validateBuild() {
-    const expectedFiles = ['dist/index-cv.html', 'dist/index.html']
+    // Check if any build exists in dist/
+    const versions = ['v0', 'v1']
+    let foundBuild = false
 
-    for (const file of expectedFiles) {
-        if (!fs.existsSync(file)) {
-            console.error(`Error: ${file} not found after build`)
-            process.exit(1)
+    for (const version of versions) {
+        const versionHtml = `dist/simulatorvue/${version}/index.html`
+        if (fs.existsSync(versionHtml)) {
+            foundBuild = true
+            console.log(`Found build for version: ${version}`)
+            break
         }
+    }
+
+    // Copy cv.html to the dist root for desktop use
+    if (fs.existsSync('index-cv.html')) {
+        fs.copyFileSync('index-cv.html', 'dist/index-cv.html')
+        console.log('Copied index-cv.html to dist/')
+    }
+
+    // Create main index.html for desktop (use v0 build)
+    const v0Index = 'dist/simulatorvue/v0/index.html'
+    if (fs.existsSync(v0Index)) {
+        fs.copyFileSync(v0Index, 'dist/index.html')
+        console.log('Copied v0 index.html to dist/')
+        foundBuild = true
+    }
+
+    if (!foundBuild) {
+        console.error('Error: No valid builds found in dist/ directory')
+        console.error(
+            'Expected: dist/simulatorvue/v0/index.html or dist/simulatorvue/v1/index.html'
+        )
+        process.exit(1)
     }
 
     console.log('Build validation successful')

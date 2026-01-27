@@ -3,7 +3,6 @@ name: Manually Triggered Desktop Release
 permissions:
     contents: write
     actions: read
-    releases: write
     packages: write
     security-events: write
 
@@ -210,27 +209,43 @@ jobs:
               shell: bash
 
             - name: Code Signing Setup (Windows)
-              if: matrix.os == 'windows-2022' && secrets.WINDOWS_CERTIFICATE_BASE64 != ''
+              if: matrix.os == 'windows-2022'
               shell: powershell
+              env:
+                  CERT_DATA: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+                  CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
               run: |
-                  $certBytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}")
+                  if ([string]::IsNullOrEmpty($env:CERT_DATA)) {
+                      Write-Host "No certificate configured, skipping signing"
+                      exit 0
+                  }
+
+                  $certBytes = [Convert]::FromBase64String($env:CERT_DATA)
                   $certPath = "C:\temp\codesign.pfx"
+                  New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
                   [System.IO.File]::WriteAllBytes($certPath, $certBytes)
 
-                  Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force)
+                  Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force)
 
-                  echo "Windows code signing certificate imported"
+                  Write-Host "Windows code signing certificate imported"
 
             - name: Code Signing (Windows)
-              if: matrix.os == 'windows-2022' && secrets.WINDOWS_CERTIFICATE_BASE64 != ''
+              if: matrix.os == 'windows-2022'
               shell: powershell
+              env:
+                  CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
               run: |
+                  if (-not (Test-Path "C:\temp\codesign.pfx")) {
+                      Write-Host "No certificate found, skipping signing"
+                      exit 0
+                  }
+
                   $filesToSign = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -Include @("*.exe", "*.msi")
 
                   foreach ($file in $filesToSign) {
                     & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe" sign `
                       /f "C:\temp\codesign.pfx" `
-                      /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" `
+                      /p "$env:CERT_PASSWORD" `
                       /tr "http://timestamp.digicert.com" `
                       /td sha256 `
                       /fd sha256 `
@@ -240,32 +255,61 @@ jobs:
                   }
 
             - name: Code Signing Setup (macOS)
-              if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+              if: matrix.os == 'macos-latest'
+              env:
+                  CERT_DATA: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+                  CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
               run: |
-                  echo "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" | base64 --decode > /tmp/developer_certificate.p12
-                  security import /tmp/developer_certificate.p12 -k ~/Library/Keychains/login.keychain-db -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
-                  security set-key-partition-list -S apple-tool:,apple: -s -k "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ~/Library/Keychains/login.keychain-db
+                  if [ -z "$CERT_DATA" ]; then
+                    echo "No certificate configured, skipping signing"
+                    exit 0
+                  fi
+
+                  echo "$CERT_DATA" | base64 --decode > /tmp/developer_certificate.p12
+                  security import /tmp/developer_certificate.p12 -k ~/Library/Keychains/login.keychain-db -P "$CERT_PASSWORD" -T /usr/bin/codesign
+                  security set-key-partition-list -S apple-tool:,apple: -s -k "$CERT_PASSWORD" ~/Library/Keychains/login.keychain-db
                   echo "macOS code signing certificate imported"
 
             - name: Code Signing (macOS)
-              if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+              if: matrix.os == 'macos-latest'
+              env:
+                  DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
               run: |
-                  find src-tauri/target/release/bundle -name "*.app" -exec codesign --force --deep --sign "${{ secrets.APPLE_DEVELOPER_ID }}" {} \;
-                  find src-tauri/target/release/bundle -name "*.dmg" -exec codesign --force --sign "${{ secrets.APPLE_DEVELOPER_ID }}" {} \;
+                  if [ ! -f "/tmp/developer_certificate.p12" ]; then
+                    echo "No certificate found, skipping signing"
+                    exit 0
+                  fi
+
+                  find src-tauri/target/release/bundle -name "*.app" -exec codesign --force --deep --sign "$DEVELOPER_ID" {} \;
+                  find src-tauri/target/release/bundle -name "*.dmg" -exec codesign --force --sign "$DEVELOPER_ID" {} \;
                   echo "macOS applications signed"
 
             - name: Code Signing Setup (Linux)
-              if: matrix.os == 'ubuntu-latest' && secrets.LINUX_GPG_PRIVATE_KEY != ''
+              if: matrix.os == 'ubuntu-latest'
+              env:
+                  GPG_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
               run: |
-                  echo "${{ secrets.LINUX_GPG_PRIVATE_KEY }}" | base64 --decode > /tmp/gpg_private.key
+                  if [ -z "$GPG_KEY" ]; then
+                    echo "No GPG key configured, skipping signing"
+                    exit 0
+                  fi
+
+                  echo "$GPG_KEY" | base64 --decode > /tmp/gpg_private.key
                   gpg --import /tmp/gpg_private.key
                   echo "Linux GPG signing key imported"
 
             - name: Code Signing (Linux)
-              if: matrix.os == 'ubuntu-latest' && secrets.LINUX_GPG_PRIVATE_KEY != ''
+              if: matrix.os == 'ubuntu-latest'
+              env:
+                  GPG_KEY_ID: ${{ secrets.LINUX_GPG_KEY_ID }}
               run: |
+                  if [ ! -f "/tmp/gpg_private.key" ]; then
+                    echo "No GPG key found, skipping signing"
+                    exit 0
+                  fi
+
                   for file in $(find src-tauri/target/release/bundle -name "*.deb" -o -name "*.AppImage"); do
-                    gpg --detach-sign --armor --local-user "${{ secrets.LINUX_GPG_KEY_ID }}" "$file"
+                    gpg --detach-sign --armor --local-user "$GPG_KEY_ID" "$file"
                     echo "Signed: $file"
                   done
 
