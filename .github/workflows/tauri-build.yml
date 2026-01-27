@@ -175,6 +175,8 @@ jobs:
 
             - name: Code Signing Setup (Linux)
               if: matrix.platform == 'ubuntu-22.04'
+              env:
+                  GPG_KEY: ${{ secrets.GPG_KEY }}
               run: |
                   if [ -z "$GPG_KEY" ]; then
                     echo "No GPG key configured, skipping signing"

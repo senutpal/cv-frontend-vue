@@ -147,8 +147,9 @@ jobs:
             - name: Test App Startup
               run: |
                   echo "Testing app startup capabilities..."
-                  if [ -f "src-tauri/target/debug/bundle/$(basename $(find src-tauri/target/debug/bundle -name '*' -type f | head -1))" ]; then
-                    echo "App bundle created successfully"
+                  bundle_file=$(find src-tauri/target/debug/bundle -type f | head -1)
+                  if [ -f "$bundle_file" ]; then
+                    echo "App bundle created successfully: $bundle_file"
                   else
                     echo "App bundle not found"
                     exit 1

@@ -1,4 +1,5 @@
 const os = require('os')
+const path = require('path')
 const { execSync } = require('child_process')
 const fs = require('fs')
 
@@ -99,9 +100,13 @@ function checkTauriConfiguration() {
         process.exit(1)
     }
 
-    if (!fs.existsSync(frontendDist)) {
+    // Resolve frontendDist relative to the tauri.conf.json location
+    const configDir = path.dirname(tauriConfigPath)
+    const resolvedFrontendDist = path.resolve(configDir, frontendDist)
+
+    if (!fs.existsSync(resolvedFrontendDist)) {
         console.error(
-            `Error: Frontend dist path ${frontendDist} does not exist`
+            `Error: Frontend dist path ${frontendDist} does not exist (resolved to ${resolvedFrontendDist})`
         )
         process.exit(1)
     }
