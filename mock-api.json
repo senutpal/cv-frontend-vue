@@ -1,0 +1,54 @@
+{
+    "circuits": [
+        {
+            "id": 1,
+            "name": "Basic AND Gate",
+            "description": "Simple AND gate circuit",
+            "tags": ["basic", "logic"],
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        },
+        {
+            "id": 2,
+            "name": "Flip Flop Circuit",
+            "description": "Basic SR flip-flop implementation",
+            "tags": ["sequential", "memory"],
+            "created_at": "2024-01-02T00:00:00Z",
+            "updated_at": "2024-01-02T00:00:00Z"
+        }
+    ],
+    "components": [
+        {
+            "id": "AND",
+            "name": "AND Gate",
+            "type": "logic",
+            "inputs": 2,
+            "outputs": 1
+        },
+        {
+            "id": "OR",
+            "name": "OR Gate",
+            "type": "logic",
+            "inputs": 2,
+            "outputs": 1
+        },
+        {
+            "id": "NOT",
+            "name": "NOT Gate",
+            "type": "logic",
+            "inputs": 1,
+            "outputs": 1
+        }
+    ],
+    "user": {
+        "id": 1,
+        "name": "Test User",
+        "email": "test@circuitverse.org"
+    },
+    "settings": {
+        "theme": "light",
+        "grid_size": 10,
+        "auto_save": true,
+        "simulation_speed": 1.0
+    }
+}

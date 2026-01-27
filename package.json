@@ -1,12 +1,13 @@
 {
     "name": "cv-frontend-vue",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "private": true,
     "scripts": {
         "serve": "vite preview",
         "build": "node scripts/multi-build.js",
         "dev": "node scripts/dev.js",
         "tauri": "tauri",
+        "build:desktop": "node build-desktop.js",
         "preview": "vite preview",
         "lint": "eslint --ext .js,.vue --ignore-path .gitignore --fix src",
         "format": "prettier .  --write",

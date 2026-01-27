@@ -1,82 +1,233 @@
 name: Vue Simulator Desktop Release
 
 on:
-  pull_request:
-  release:
-    types: [created]
+    pull_request:
+        types: [opened, synchronize, reopened]
+    release:
+        types: [created]
 
 permissions:
-  contents: write
+    contents: write
+    actions: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build-tauri:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin' # Apple Silicon
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'  # Intel Mac
-          - platform: 'ubuntu-22.04'
-            args: ''
-          - platform: 'windows-latest'
-            args: ''
-          
+    build-tauri:
+        name: Build Desktop App (${{ matrix.platform }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - platform: 'macos-latest'
+                      args: '--target aarch64-apple-darwin'
+                      arch: 'arm64'
+                    - platform: 'macos-latest'
+                      args: '--target x86_64-apple-darwin'
+                      arch: 'x64'
+                    - platform: 'ubuntu-22.04'
+                      args: ''
+                      arch: 'x64'
+                    - platform: 'windows-latest'
+                      args: ''
+                      arch: 'x64'
 
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+        runs-on: ${{ matrix.platform }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          # Targets for cross-compiling on MacOS
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: 'npm'
 
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+            - name: Install Rust stable
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Install Frontend Dependencies
-        run: npm install
-        working-directory: ./src  
+            - name: Cache Rust Dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: './src-tauri'
+                  key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build Frontend (Vue)
-        # Using npx ensures these tools work on Windows, Mac, and Linux
-        run: |
-          npx cross-env DESKTOP_MODE=true npm run build
-          node -e "const fs = require('fs'); const src='./dist/index-cv.html'; const dest='./dist/index.html'; if (fs.existsSync(src)) { fs.copyFileSync(src, dest); console.log('Synced index files'); } else { console.log('index-cv.html not found, skipping sync'); }"
-        working-directory: ./src
+            - name: Install Platform Dependencies (Linux)
+              if: matrix.platform == 'ubuntu-22.04'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y \
+                    libwebkit2gtk-4.1-dev \
+                    libappindicator3-dev \
+                    librsvg2-dev \
+                    patchelf \
+                    build-essential \
+                    curl \
+                    wget \
+                    file \
+                    libssl-dev \
+                    libxdo-dev
 
-      - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: ./src-tauri
-          args: ${{ matrix.args }}
+            - name: Install Platform Dependencies (macOS)
+              if: matrix.platform == 'macos-latest'
+              run: |
+                  brew update
+                  brew install pkg-config create-dmg
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-assets-${{ matrix.platform }}-${{ strategy.job-index }}
-          path: |
-            src-tauri/target/**/release/bundle/dmg/*.dmg
-            src-tauri/target/**/release/bundle/macos/*.app
-            src-tauri/target/**/release/bundle/msi/*.msi
-            src-tauri/target/**/release/bundle/nsis/*.exe
-            src-tauri/target/**/release/bundle/deb/*.deb
-            src-tauri/target/**/release/bundle/appimage/*.AppImage
+            - name: Install Platform Dependencies (Windows)
+              if: matrix.platform == 'windows-latest'
+              shell: powershell
+              run: |
+                  choco install -y wixtoolset nsis webview2-runtime
+
+            - name: Install Dependencies
+              run: npm ci
+
+            - name: Build Frontend for Desktop
+              run: |
+                  node build-desktop.js
+
+            - name: Build Tauri App
+              uses: tauri-apps/tauri-action@v0
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+              with:
+                  projectPath: ./src-tauri
+                  args: ${{ matrix.args }}
+                  releaseId: ${{ github.event.release.id }}
+
+            - name: Code Signing Setup (Windows)
+              if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_BASE64 != ''
+              shell: powershell
+              run: |
+                  $certBytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}")
+                  $certPath = "C:\temp\codesign.pfx"
+                  [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+                  Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force)
+
+            - name: Code Signing (Windows)
+              if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_BASE64 != ''
+              shell: powershell
+              run: |
+                  $filesToSign = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -Include @("*.exe", "*.msi")
+                  foreach ($file in $filesToSign) {
+                    & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe" sign `
+                      /f "C:\temp\codesign.pfx" `
+                      /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" `
+                      /tr "http://timestamp.digicert.com" `
+                      /td sha256 `
+                      /fd sha256 `
+                      $file.FullName
+                  }
+
+            - name: Code Signing Setup (macOS)
+              if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+              run: |
+                  echo "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" | base64 --decode > /tmp/developer_certificate.p12
+                  security import /tmp/developer_certificate.p12 -k ~/Library/Keychains/login.keychain-db -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+                  security set-key-partition-list -S apple-tool:,apple: -s -k "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ~/Library/Keychains/login.keychain-db
+
+            - name: Code Signing (macOS)
+              if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+              run: |
+                  find src-tauri/target/release/bundle -name "*.app" -exec codesign --force --deep --sign "${{ secrets.APPLE_DEVELOPER_ID }}" {} \;
+                  find src-tauri/target/release/bundle -name "*.dmg" -exec codesign --force --sign "${{ secrets.APPLE_DEVELOPER_ID }}" {} \;
+
+            - name: Code Signing Setup (Linux)
+              if: matrix.platform == 'ubuntu-22.04' && secrets.LINUX_GPG_PRIVATE_KEY != ''
+              run: |
+                  echo "${{ secrets.LINUX_GPG_PRIVATE_KEY }}" | base64 --decode > /tmp/gpg_private.key
+                  gpg --import /tmp/gpg_private.key
+
+            - name: Code Signing (Linux)
+              if: matrix.platform == 'ubuntu-22.04' && secrets.LINUX_GPG_PRIVATE_KEY != ''
+              run: |
+                  for file in $(find src-tauri/target/release/bundle -name "*.deb" -o -name "*.AppImage"); do
+                    gpg --detach-sign --armor --local-user "${{ secrets.LINUX_GPG_KEY_ID }}" "$file"
+                  done
+
+            - name: Upload Build Artifacts
+              uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: build-artifacts-${{ matrix.platform }}-${{ matrix.arch }}
+                  path: |
+                      src-tauri/target/**/release/bundle/
+                      !src-tauri/target/**/release/bundle/**/*.dSYM/**
+                  retention-days: 30
+
+    release-summary:
+        name: Release Summary
+        runs-on: ubuntu-latest
+        needs: build-tauri
+        if: github.event_name == 'release'
+
+        steps:
+            - name: Download All Artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
+
+            - name: Generate Release Summary
+              run: |
+                  echo "## Build Artifacts Summary" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "| Platform | Architecture | Status |" >> $GITHUB_STEP_SUMMARY
+                  echo "|----------|--------------|--------|" >> $GITHUB_STEP_SUMMARY
+
+                  for dir in artifacts/build-artifacts-*; do
+                    if [ -d "$dir" ]; then
+                      platform=$(echo "$dir" | sed 's/.*build-artifacts-\(.*\)-\(.*\)/\1/')
+                      arch=$(echo "$dir" | sed 's/.*build-artifacts-\(.*\)-\(.*\)/\2/')
+                      
+                      if [ "$(find "$dir" -type f | wc -l)" -gt 0 ]; then
+                        status="Success"
+                      else
+                        status="Failed"
+                      fi
+                      
+                      echo "| $platform | $arch | $status |" >> $GITHUB_STEP_SUMMARY
+                    fi
+                  done
+
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "All artifacts have been uploaded to the release assets." >> $GITHUB_STEP_SUMMARY
+
+    security-scan:
+        name: Security Scan
+        runs-on: ubuntu-latest
+        needs: build-tauri
+        if: github.event_name == 'release'
+
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+
+            - name: Run Cargo Audit
+              run: |
+                  cargo install cargo-audit
+                  cd src-tauri
+                  cargo audit
+
+            - name: Run Trivy Security Scan
+              uses: aquasecurity/trivy-action@master
+              with:
+                  scan-type: 'fs'
+                  scan-ref: '.'
+                  format: 'sarif'
+                  output: 'trivy-results.sarif'
+
+            - name: Upload Trivy Scan Results
+              uses: github/codeql-action/upload-sarif@v3
+              if: always()
+              with:
+                  sarif_file: 'trivy-results.sarif'
